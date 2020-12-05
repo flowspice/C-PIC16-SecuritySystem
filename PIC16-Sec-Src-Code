@@ -1,0 +1,580 @@
+/*
+ * File:   SecurityCode.c
+ * Author: Luke Hudgins
+ */
+
+
+
+#include <stdio.h>
+#include <xc.h>
+#define _XTAL_FREQ 16000000
+#pragma config FOSC = INTIO67
+
+void WriteToScreen(char[]);
+void Init(void);
+char GetArmed(void);
+char Siren(char);
+char DetectKeypad(char);
+char CodeReceive(char[], char[], char[], char[]);
+/*
+ * Most of the computing done in this program is done inside functions but there 
+ * is still a bit done inside the main function. It begins with printing array
+ * Startup[] to the screen asking the user to press any key to continue. 
+ * Following this the DetectKeypad is called to detect that any key simply to 
+ * progress the code. The input for DetectKeypad at this point is 0 because the
+ * TMR0 countdown is not desired. The GetArmed function is then called to 
+ * determine what zones will be armed, that return is stored in the char Armed.
+ * Then the Siren function is called to wait for one of the zones to be
+ * triggered. When it does, that return is stored in the char Buzzer. If 
+ * Buzzer = 0, then the user chose none of the zones to be armed and AlarmDis[]
+ * will be written to the LCD. If Buzzer = 1, then the alarm has been triggered.
+ * The code will notify the user, call the codeReceive function to receive
+ * and analyze the inputted code, and return a value to the character safe. If
+ * safe = 0, the code entered was correct and Buzzer will be set to 0. This will
+ * exit the while loop, turn off the siren if it is on, and display on the LCD 
+ * that the alarm is disarmed. If safe = 0, the code entered was incorrect and 
+ * the code will prompt the user to enter another code. If safe = 2, the 10 
+ * second timer ran out and will not show the WrongCode[] array, but will still
+ * loop and ask for the user to enter another code. This program will only end 
+ * if one of the four correct codes have been entered. At this point it will 
+ * simply restart at the beginning of main.
+ */
+void main() 
+{
+    Init();
+    char Startup[] = "Security System Press any key.";
+    char AlarmTRIG[] = "Alarm Triggered";
+    char AlarmDis[] = "Alarm Disarmed";
+    char WrongCode[] = "Invalid Code";
+    char Code1[] = "9182";
+    char Code2[] = "1234";
+    char Code3[] = "2255";
+    char Code4[] = "7986";
+    char Armed;
+    char any;
+    char Buzzer;
+    char DetectKeyVar = 0;
+    char safe = 0;
+    __delay_ms(250);
+    WriteToScreen(Startup);
+    any = DetectKeypad(DetectKeyVar); //looks for any key to progress the code
+    Armed = GetArmed(); //determines what combination of zones will be armed
+    Buzzer = Siren(Armed); //waits in this function for a zone to be triggered, then returns a value to buzzer
+    while(Buzzer == 1) //while system is triggered
+    {
+        WriteToScreen(AlarmTRIG);
+        __delay_ms(1000);
+        while(safe == 0) //while code is incorrect
+        {
+            safe = CodeReceive(Code1, Code2, Code3, Code4); //receives and analyzes inputted code
+            if(safe == 1) //if code is correct
+            {
+                Buzzer = 0; //code is correct, exit while loop
+            }else if(safe == 2){ //10 second timer expired, WrongCode is not written to LCD but remain in while loop
+                safe = 0; 
+            }else if(safe == 0) //if code entered is incorrect
+            {
+                WriteToScreen(WrongCode);
+                __delay_ms(1000); //delay to give user enough time to read
+            }
+        }
+    }
+    if(RA7 == 1) //if the siren is on at this point, turn it off
+    {
+        RA7 = 0;
+    }
+    if(Buzzer == 0) //if correct code is entered, the armed LEDs will turn off to signal that the system has been disabled
+    {
+        PORTC = 0x00;
+        WriteToScreen(AlarmDis);
+        __delay_ms(2000);
+    }
+    
+    
+   
+}
+/*
+ * Inputs: A string of characters
+ * Returns: Void
+ * 
+ * Takes the inputed string and writes it to the LCD screen though 
+ * TXREG to the LCD screen one character at a time. It also clears the 
+ * screen before it begins to write any characters. This function is called 
+ * every time a string needs to be written to the LCD screen.
+*/
+void WriteToScreen(char str[])  
+{
+    unsigned int i;
+    __delay_ms(50); //may not be needed, might be able to make smaller
+    i = 0;  //character iterator 
+    
+    while(!TXIF);
+    TXREG = 12; //clearing display
+    __delay_ms(10); //recommended delay after clearing
+    
+	while(str[i])   //loop to write each character to LCD though TXREG
+	{
+        while(!TXIF); 
+        TXREG = str[i]; 
+        __delay_ms(10);
+        i++;		
+	}
+	
+}
+/*
+ * Inputs: Void
+ * Returns: Char ArmedValue
+ * 
+ * This is the function that determines what combination of zones will be armed 
+ * based on a user input. It uses a combination of the WritetoScreen function
+ * and the DetectKeypad to ask and determine which zones should be armed. The
+ * value of the character ArmedValue is then changed to reflect the requested
+ * armed zones based on if key A or B is pressed. Inside the function are loops 
+ * that look at the inputted key and if it is not A or B, the user will be 
+ * prompted to enter another key. The returned character ArmedValue will
+ * immediately be inputted into the siren function after it has been returned 
+ * to main.
+*/
+char GetArmed(void)
+{
+    char ArmedValue = 0;
+    char Key; 
+    char DetectVar2 = 0;
+    char zone1[] = "Arm Zone 1?     A=Yes B=No";
+    char zone2[] = "Arm Zone 2?     A=Yes B=No";
+    char zone3[] = "Arm Zone 3?     A=Yes B=No";
+    char Invalid[] = "Invalid Entry   Please Re-Enter";
+    
+    WriteToScreen(zone1);//Arm zone 1?
+    Key = DetectKeypad(DetectVar2);
+    while(Key != 'A' && Key != 'B') //Only keys A and B are accepted here
+    {
+        WriteToScreen(Invalid); //repeats until A or B is pressed
+        __delay_ms(1000);
+        WriteToScreen(zone1);   
+        Key = DetectKeypad(DetectVar2);
+    }
+    
+    if(Key == 'A')
+        ArmedValue+=1;  //changes Armed value based on key press
+    else
+        ArmedValue+=0;
+    
+    WriteToScreen(zone2);   //Arm zone 2?
+    Key = DetectKeypad(DetectVar2);
+    while(Key != 'A' && Key != 'B') //Only keys A and B are accepted here
+    {
+        WriteToScreen(Invalid); //repeats until A or B is pressed
+        __delay_ms(1000);
+        WriteToScreen(zone2);
+        Key = DetectKeypad(DetectVar2);
+    }
+    if(Key == 'A')  //changes Armed value based on key press
+        ArmedValue+=2;
+    else
+        ArmedValue+=0;
+    
+    WriteToScreen(zone3);   //Arm zone 3?
+    Key = DetectKeypad(DetectVar2);
+    while(Key != 'A' && Key != 'B') //Only keys A and B are accepted here
+    {
+        WriteToScreen(Invalid); //repeats until A or B is pressed
+        __delay_ms(1000);
+        WriteToScreen(zone3);
+        Key = DetectKeypad(DetectVar2);
+    }
+    if(Key == 'A')  //changes Armed value based on key press
+        ArmedValue+=4;
+    else if(Key == 'B')
+        ArmedValue+=0;
+    
+    return ArmedValue;
+}
+/*
+ * Inputs: Character
+ * Returns: Void
+ * 
+ * This function takes the passed character and determines what zones need to be
+ * armed based on it's value. At any point during this code the only possible 
+ * values for the passed char are between 0 and 7. Between values 1 and 7, all
+ * possible combinations of zones being armed is accounted for, with 0 being no
+ * zones being armed. When the combination of zones is determined, the LED ports 
+ * corresponding to the armed zones will be set to 1 and illuminate them.
+ * RC0 -> zone 1
+ * RC1 -> zone 2
+ * RC2 -> zone 3
+ */
+char Siren(char Arm)
+{
+    char rdy[] = "System Armed";
+    char b = 0;
+    char h = 0;
+    TXREG = 0x0C;   //clears the display
+    if(Arm == 0)    //no armed zones
+        b == 0;
+    while(Arm != 0 && b != 1)
+    {
+        if(Arm == 1){ //1 = zone1
+            RC0 = 1;
+            if(h == 0)//this statement makes sure that the message is not printed more than once while the code is waiting for a zone to be triggered
+            {
+                WriteToScreen(rdy); //tells the user that the system is armed
+                h = 1; 
+            }
+            if(RA0 == 1)    
+                b = 1;
+        }else if(Arm == 2){ //2 = zone2
+            RC1 = 1;
+            if(h == 0)
+            {
+                WriteToScreen(rdy);
+                h = 1;
+            }
+            if(RA1 == 1)    
+                b = 1;
+        }else if(Arm == 3){ //3 = zone 1 and 2
+            RC0 = 1;
+            RC1 = 1;
+            if(h == 0)
+            {
+                WriteToScreen(rdy);
+                h = 1;
+            }
+            if(RA0 == 1 || RA1 == 1)    
+                b = 1;
+        }else if(Arm == 4){ //4 = zone3
+            RC2 = 1;
+            if(RA2 == 1)    
+                b = 1;
+        }else if(Arm == 5){ //5 = zone 1 and 3
+            RC0 = 1;
+            RC2 = 1;
+            if(h == 0)
+            {
+                WriteToScreen(rdy);
+                h = 1;
+            }
+            if(RA0 == 1 || RA2 == 1)    
+                b = 1;
+        }else if(Arm == 6){//6 = zone 2 and 3
+            RC1 = 1;
+            RC2 = 1;
+            if(h == 0)
+            {
+                WriteToScreen(rdy);
+                h = 1;
+            }
+            if(RA1 == 1 || RA2 == 1)    
+                b = 1;
+        }else if(Arm == 7){ //7 = all zones
+            RC0 = 1;
+            RC1 = 1;
+            RC2 = 1;
+            if(h == 0)
+            {
+                WriteToScreen(rdy);
+                h = 1;
+            }
+            if(RA0 == 1 || RA1 == 1 || RA2 == 1)    
+                b = 1;
+        }
+    }
+    return b;
+}
+/* 
+ * Inputs: Character
+ * Returns: Character k
+ * 
+ * This is the function that detects the key press of the keypad. The idea of
+ * this function is that it keeps looping until a key is pressed. It does this 
+ * by setting a variable to a number (in this case k is set to 10). Until a key 
+ * is pressed the value of k will not change. When k does change, it will change
+ * to the character value of the key press and will exit the loop, returning the 
+ * character value. It also has the ability to start the 10 second countdown if 
+ * one of the zones is triggered. The inputted char tells the function whether 
+ * or not to set the TMR0 registers. The only time this function needs to start 
+ * the countdown is when it is called from the CodeReceive function. That is 
+ * the only time a char with a value of 1 is passed to it. The lowest frequency
+ * possible from TMR0 is the set high and low values, they provide a frequency
+ * of 0.2Hz(5 sec). To increase this to 10 seconds, a char g is increased 
+ * every time the interrupt flag occurs. If g becomes greater than 2, the loop
+ * stops and returns a unique value 'G' to main. When the TMR0 is not used,
+ * the loop starts by setting the port connected to the first row of the keypad 
+ * to 1. It then checks the ports connected to the columns of the keypad to 
+ * determine what key is pressed. If not key is pressed, the value of k does not
+ * change and the loop continues. After one row is done, it is set to 0 and the 
+ * next row is enabled. Each row is enabled, disabled, and then the columns are 
+ * checked for highs in between until a key is pressed. That key is assigned to 
+ * k, exiting the loop, and returning the value of k.
+ */
+char DetectKeypad(char var)
+{
+    char k = 10;
+    char g = 0;
+    TMR0ON = 0;
+    if(var == 1) //if called from CodeRecieve, starts the 10 second countdown
+    {
+        if(RA7 == 0)
+        {
+            TMR0ON = 1; 
+        }
+        
+        TMR0H = 0x67; //TMR0H & TRM0L values for a 16 bit frequency of 0.2 Hz 
+        TMR0L = 0x6A;
+    }
+    while(k == 10)
+    {
+        RD1 = 0;    //initialize keypad rows
+        RD2 = 0;
+        RD3 = 0;
+        __delay_ms(20);
+        RD0 = 1;    //Row 1 set high 
+        if(TMR0IF) //loop to increase the delay before alarm goes off
+        {
+            g++; 
+            TMR0IF = 0;
+        }
+        if(g > 2) //loop to return unique value 'G' if 10 seconds expires
+        {
+            k = 'G';
+            return k;
+        }
+        if(RD4 == 1)    //vertical 1 checked
+            k = '0';    //characters correspond to the keypad labels 
+        else if(RD5 == 1)   //vertical 2 checked
+            k = '1';
+        else if(RD6 == 1)   //vertical 3 checked
+            k = '2';
+        else if(RD7 == 1)   //vertical 4 checked
+            k = '3';
+        else 
+        {
+            RD0 = 0;    //Row 1 set low
+            __delay_ms(20); //delay to make sure rows aren't high at the same time
+            RD1 = 1;    //Row 2 set high
+            if(RD4 == 1)
+                k = '4';
+            else if(RD5 == 1)
+                k = '5';
+            else if(RD6 == 1)
+                k = '6';
+            else if(RD7 == 1)
+                k = '7';
+            else 
+            {
+                RD1 = 0;    //Row 2 set low
+                __delay_ms(20); //delay to make sure rows aren't high at the same time
+                RD2 = 1;    //Row 3 set high 
+                if(RD4 == 1)
+                    k = '8';
+                else if(RD5 == 1)
+                    k = '9';
+                else if(RD6 == 1)
+                    k = 'A';
+                else if(RD7 == 1)
+                    k = 'B';
+                else 
+                {
+                    RD2 = 0;    //Row 3 set low
+                    __delay_ms(20); //delay to make sure rows aren't high at the same time
+                    RD3 = 1;    //Row 4 set high 
+                    if(RD4 == 1)
+                        k = 'C';
+                    else if(RD5 == 1)
+                        k = 'D';
+                    else if(RD6 == 1)
+                        k = 'E';
+                    else if(RD7 == 1)
+                        k = 'F';
+                }
+            }
+        }
+    }
+    while((PORTD & 0xF0)!= 0); //makes sure the character is not returned until the key is released
+    return k;
+}
+/*
+ * Inputs: cde1[], cde2[], cde3[], cde4[]
+ * Outputs: character f
+ * 
+ * This is the function that compares the entered code by the user to the stored
+ * codes in memory. It starts by calling the DetectKeypad function. This is the 
+ * only function in the code that passes a character with a value of 1 to that 
+ * function. It does this to start the TMR0 values and the 10 second countdown
+ * before the alarm goes off. At the beginning there is a character z that is 
+ * initialized to 1. There is an if statement that clears the screen, then sets 
+ * z to 0 so that the screen is only cleared once per time this function is 
+ * called. Because of this, the characters detected by DetectKeypad will be 
+ * displayed on the screen as they are received. The inputted code is stored 
+ * one character after another into the array CodeInput[]. If the 10 second
+ * countdown expires, the character 'G' will be returned from DetectKeypad. 'G' 
+ * was chosen because it is not a character found on the keypad. At this time,
+ * Timeout[] will be put on screen and the siren port RA7 will set to 1, turning
+ * on the siren. At this point a value of 2 is returned to main. If the siren is
+ * already on, or if the code is entered before the 10 seconds is up, this 
+ * function will compare the CodeInput[] array to each of the four passed arrays
+ * of characters. Before it does this, there is a check to see if the inputted 
+ * code is more than 4 characters, and if it is, it returns the value 0 to main 
+ * as if the code was entered incorrectly. Each of the four different inputted
+ * codes are checked one at a time. It values of CodeInput are compared to the
+ * values of cde1[] to cde4[] using the same iterator j inside of a while loop. 
+ * If at any point the values do not match, the character e is set to 1, ending 
+ * the while loop. After e and j are both set to 0, the same while loop is 
+ * called to compare CodeInput with the next passed array. If during one of the 
+ * while loops finds that CodeInput matches one of the stored codes, a value of 
+ * 1 is returned to main. Also, at the end of the four while loops, a value of 0
+ * is returned to main to show CodeInput did not match any of the codes. This
+ * function will be continously called until a correct code is inputted.
+ */
+char CodeReceive(char cde1[], char cde2[], char cde3[], char cde4[])
+{
+    char Enter[] = "Please Enter    Code...";
+    char Timeout[] = "Code Entry      Period Expired";
+    char CodeInput[];
+    char e = 0;
+    char DetectKeyVar3 = 1; //passed value of 1 to start TMR0
+    char j = 0;
+    char c = 0;
+    char f = 0;
+    char z = 1;
+    
+    WriteToScreen(Enter);
+    
+    while(c != 'B')
+    {
+        c = DetectKeypad(DetectKeyVar3); //receives input from keypad and stores it in the character c
+        if(z == 1) //loop to make the screen only clear once per function call
+        {
+            TXREG = 0x0C;
+            z = 0;
+        }
+        if(c != 'B' && c != 'G') 
+        {
+            CodeInput[j] = c; //stores the inputted keys in the CodeInput array
+            
+            while(!TXIF);
+            TXREG = c; //writes the value of c to the LCD display as it is entered
+            j++;
+        }
+        if(c == 'G') //G is returned from DetectKeypad if the 10 seconds expires
+        {
+            TXREG = 0x0C;
+            __delay_ms(40);
+            WriteToScreen(Timeout);
+            RA7 = 1;
+            __delay_ms(2000);
+            f = 2; //specific return value if 20 seconds expires
+            return f;
+        }
+    }  
+    if(j > 4) //if inputted code is larger than 4 characters, the code is considered false and 0 is returned
+    {
+        f = 0;
+        return f;
+    }
+    j = 0; //same array iterator as above set back to 0
+    while(j <= cde1[j] && e != 1)
+    {
+        if(CodeInput[j] == cde1[j])
+        {
+            j++; //iterates every time the values in the arrays match
+            if(j==4) //if iterator gets to 4, the code matches cde1
+            {
+                f = 1; //if code is correct, a value of 1 is returned
+                return f;
+            }
+        }else{
+            e = 1; //character value used to exit while loop if at any point CodeInput does not match cde1
+        }
+    }
+    e = 0; //exit iterator reset to 0 for analyzing the next array
+    j = 0;
+    while(j <= cde2[j] && e != 1) //same code but for cde2
+    {
+        if(CodeInput[j] == cde2[j])
+        {
+            j++;
+            if(j==4)
+            {
+                f = 1;
+                return f;
+            }
+        }else{
+            e = 1;
+        }
+    }
+    e = 0;
+    j = 0;
+    while(j <= cde3[j] && e != 1) //same code but for cde3
+    {
+        if(CodeInput[j] == cde3[j])
+        {
+            j++;
+            if(j==4)
+            {
+                f = 1;
+                return f;
+            }
+        }else{
+            e = 1;
+        }
+            
+    }
+    e = 0;
+    j = 0;
+    while(j <= cde4[j] && e != 1) //same code but for cde4
+    {
+        if(CodeInput[j] == cde4[j])
+        {
+            j++;
+            if(j==4)
+            {
+                f = 1;
+                return f;
+            }
+        }else{
+            e = 1;
+        }
+    } 
+    f = 0; //if at the end the inputted code matches none of cde1 through cde4, the code is considered false and 0 is returned
+    return f;
+}
+
+/*
+ * Initializes all the necessary registers required for the microcontroller to
+ * to run the code.
+ */
+void Init(void)
+{
+    //__delay_ms(250);
+    ANSEL = 0x00;   //0b00000000 <- all analog pins are set to digital
+    TRISD = 0xF0;   //0b11110000 <- keypad columns set to inputs while rows are outputs
+    TRISA = 0x07;   //0b00000111 <- zone inputs
+    TRISC = 0x00;   //0b00000000 <- Only using pins 0-2 as outputs for LEDS
+    PORTC = 0x00;   //0b00000000 <- initializing LED output ports to 0
+    RA7 = 0;    //Initialize Siren
+    RD3 = 0;    //Initialize Keypad 13-16
+    RD2 = 0;    //Initialize Keypad 9-12
+    RD1 = 0;    //Initialize Keypad 5-8
+    RD0 = 0;    //Initialize Keypad 1-4
+    
+	OSCTUNE = 0;
+	OSCCON= 0x7E;   //16MHz	internal clock
+    INTCON = 0x00;  
+    T0CON = 0b10000111; //enables TMR0 with a pre scaler of 256
+    TMR0L = 0x00;
+    TMR0H = 0x00;
+    
+	BRGH = 1;	
+	BRG16= 0;				
+	SYNC = 0;				
+	SPBRG = 103;     //9600Baud (matched  with LCD)
+	RX9 = 0;    //Disables 9 bit receiving
+	TX9 = 0;    //Disables 9 bit transmitting
+	SPEN = 1;	//enables serial transmission
+ 	CREN = 0;
+    TXEN = 1;   //enables TXREG functionality
+    while(!TXIF);
+        TXREG = 0x0C;   //0b00001100
+    __delay_ms(40); //delay after clearing screen
+}
